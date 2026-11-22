@@ -21,9 +21,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       ISSUE: ${{ github.event.issue.number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -32,6 +32,7 @@ jobs:
 
       - name: Save purchase
         id: save
+        continue-on-error: true   # bad input: reply to the issue, do not mark the run failed
         env:
           ISSUE_BODY: ${{ github.event.issue.body }}
         run: python scripts/record_purchase.py

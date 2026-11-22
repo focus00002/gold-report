@@ -22,6 +22,8 @@
     --warning: #fab219;
     --critical: #d03b3b;
     --neutral: #8a8984;
+    --band-50: rgba(42,120,214,.30);
+    --band-80: rgba(42,120,214,.14);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -36,6 +38,8 @@
       --series-1: #3987e5;
       --series-2: #d95926;
       --series-3: #199e70;
+      --band-50: rgba(57,135,229,.36);
+      --band-80: rgba(57,135,229,.18);
     }
   }
   * { box-sizing: border-box; }
@@ -98,6 +102,13 @@
   .btn { display: inline-block; padding: 8px 18px; border-radius: 999px; text-decoration: none;
     border: 1px solid var(--border); color: var(--text-primary); font-weight: 600; }
   .btn.primary { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+  .legend i.sw { height: 10px; border-radius: 2px; }
+  ul.news { list-style: none; margin: 6px 0 0; padding: 0; }
+  ul.news li { padding: 7px 0; border-bottom: 1px solid var(--grid); font-size: 14px; display: flex; gap: 8px; }
+  ul.news a { color: var(--text-primary); text-decoration: none; }
+  ul.news a:hover { text-decoration: underline; }
+  ul.news .m { color: var(--text-muted); font-size: 12px; }
+  .tag { flex: none; width: 1.4em; text-align: center; font-weight: 700; }
   .note { font-size: 12.5px; color: var(--text-muted); margin-top: 16px; }
   .err { color: var(--critical); }
 </style>
@@ -129,6 +140,34 @@
   </section>
 
   <section class="card grid" id="tiles"></section>
+
+  <section class="card" id="fcCard">
+    <div class="toolbar">
+      <h2 style="margin:0 12px 0 0">คาดการณ์ราคาล่วงหน้า</h2>
+      <div class="legend">
+        <span><i style="background:var(--series-1)"></i>ราคาจริง</span>
+        <span><i class="sw" style="background:var(--band-50)"></i>ช่วง 50%</span>
+        <span><i class="sw" style="background:var(--band-80)"></i>ช่วง 80%</span>
+        <span><i style="border-top:2px dashed var(--series-1);height:0"></i>ค่ากลาง</span>
+      </div>
+    </div>
+    <div class="sub" id="fcLean" style="margin-bottom:10px"></div>
+    <div class="chart-box"><canvas id="fcChart" aria-label="กราฟคาดการณ์ราคาทอง"></canvas></div>
+    <div class="scroll" style="margin-top:12px"><table id="fcTable"></table></div>
+    <h2 style="margin-top:20px">ความแม่นย้อนหลัง 3 ปี</h2>
+    <div class="scroll"><table id="fcBt"></table></div>
+    <div class="sub" id="fcBtNote" style="margin-top:8px"></div>
+    <div id="fcTrack"></div>
+  </section>
+
+  <section class="card">
+    <h2>ข่าวทองคำ 48 ชั่วโมงล่าสุด</h2>
+    <div class="sub" id="newsSum" style="margin-bottom:10px"></div>
+    <div class="cols">
+      <div><div class="k sub" style="font-weight:600">ข่าวไทย</div><ul class="news" id="newsTh"></ul></div>
+      <div><div class="k sub" style="font-weight:600">ข่าวต่างประเทศ</div><ul class="news" id="newsEn"></ul></div>
+    </div>
+  </section>
 
   <section class="card">
     <div class="toolbar">
@@ -181,6 +220,7 @@ const fmt = (x, d = 0) => x == null ? "-" : Number(x).toLocaleString("th-TH", { 
 const sgn = (x, d = 0) => x == null ? "-" : (x > 0 ? "+" : "") + fmt(x, d);
 const cls = x => x > 0 ? "pos" : x < 0 ? "neg" : "";
 const thDate = s => new Date(s + "T00:00:00").toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const statusColor = s => css("--" + (s || "neutral"));
 
 let DATA, priceChart, rsiChart;
@@ -259,7 +299,6 @@ function render() {
 
   // plan since start + real portfolio
   const P = DATA.portfolio;
-  const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   document.getElementById("port").innerHTML = P ? `<table>
       <tr><td class="l">ซื้อขายแล้ว</td><td>${P.count} ครั้ง</td></tr>
       <tr><td class="l">ซื้อรวม</td><td>${fmt(P.bought)} บาท</td></tr>
@@ -291,9 +330,101 @@ function render() {
     }).join("");
 
   drawCharts(1);
+  renderForecast();
   document.querySelectorAll(".toolbar button").forEach(b => b.onclick = () => {
     document.querySelectorAll(".toolbar button").forEach(o => o.setAttribute("aria-pressed", o === b));
     drawCharts(+b.dataset.y);
+  });
+}
+
+let fcChart;
+function renderForecast() {
+  const F = DATA.forecast;
+  if (!F) { document.getElementById("fcCard").style.display = "none"; return; }
+  const hName = h => ({ 1: "1 วัน", 7: "7 วัน", 15: "15 วัน", 30: "1 เดือน" }[h] || h + " วัน");
+  const arrow = w => w === "เอียงขึ้น" ? "▲" : w === "เอียงลง" ? "▼" : "•";
+  const N = F.news;
+  document.getElementById("fcLean").innerHTML =
+    `ภาพรวม: <b>${arrow(F.lean_word)} ${F.lean_word}</b> · เทรนด์ 20 วัน: ${arrow(F.trend_word)} ${F.trend_word} · ` +
+    `ข่าว: ${arrow(N.word)} ${N.word} (ข่าวบวก ${N.bull} · ข่าวลบ ${N.bear} · กลาง ${N.neutral}) · ` +
+    `ราคาปกติขยับวันละประมาณ ±${fmt(F.sigma_daily_pct, 2)}%`;
+
+  document.getElementById("fcTable").innerHTML =
+    `<tr><th class="l">ล่วงหน้า</th><th class="l">วันที่</th><th>ค่ากลาง</th><th>ช่วง 50%</th><th>ช่วง 80%</th><th>โอกาสสูงกว่าวันนี้</th></tr>` +
+    F.rows.map(r => `<tr><td>${hName(r.h)}</td><td class="l">${thDate(r.target)}</td><td>${fmt(r.center)}</td>
+      <td>${fmt(r.lo50)} – ${fmt(r.hi50)}</td><td>${fmt(r.lo80)} – ${fmt(r.hi80)}</td><td>${fmt(r.p_up * 100, 0)}%</td></tr>`).join("");
+
+  document.getElementById("fcBt").innerHTML =
+    `<tr><th class="l">ล่วงหน้า</th><th>ราคาจริงอยู่ในช่วง 80%</th><th>อยู่ในช่วง 50%</th><th>ทายทิศถูก</th><th>ถ้าทายว่า "ขึ้น" ตลอด</th></tr>` +
+    F.backtest.map(b => `<tr><td>${hName(b.h)}</td><td>${fmt(b.cover80, 1)}%</td><td>${fmt(b.cover50, 1)}%</td>
+      <td>${fmt(b.direction, 1)}%</td><td>${fmt(b.up_rate, 1)}%</td></tr>`).join("");
+  document.getElementById("fcBtNote").textContent =
+    "ช่วงราคาเชื่อถือได้ (ราคาจริงตกในช่วง 80% ประมาณ 80% ของครั้ง) แต่การทายทิศขึ้น/ลงยังไม่ดีกว่าการเดาว่า \"ขึ้น\" ตลอด " +
+    "จึงควรใช้ช่วงราคาเป็นหลัก ส่วนทิศทางใช้ประกอบเท่านั้น (ทดสอบได้เฉพาะส่วนเทรนด์ เพราะไม่มีข้อมูลข่าวย้อนหลัง)";
+
+  const T = F.track;
+  document.getElementById("fcTrack").innerHTML = T.count
+    ? `<h2 style="margin-top:20px">ผลคาดการณ์จริงที่ครบกำหนดแล้ว (${T.count} ครั้ง)</h2>
+       <div class="sub">อยู่ในช่วง 80%: ${fmt(T.cover80, 1)}% · ทายทิศถูก: ${fmt(T.direction, 1)}%</div>
+       <div class="scroll"><table><tr><th class="l">คาดเมื่อ</th><th class="l">ล่วงหน้า</th><th class="l">ถึงวันที่</th><th>ช่วง 80%</th><th>ราคาจริง</th><th class="l">ผล</th></tr>` +
+      T.rows.map(x => `<tr><td>${thDate(x.made)}</td><td class="l">${hName(x.h)}</td><td class="l">${thDate(x.target)}</td>
+        <td>${fmt(x.lo80)} – ${fmt(x.hi80)}</td><td>${fmt(x.actual)}</td>
+        <td class="l">${x.in80 ? "✓ ในช่วง" : "✗ นอกช่วง"} · ${x.dir_ok ? "ทิศถูก" : "ทิศผิด"}</td></tr>`).join("") + `</table></div>`
+    : `<div class="sub" style="margin-top:12px">ผลคาดการณ์จริงจะเริ่มแสดงตั้งแต่พรุ่งนี้ เมื่อคาดการณ์ 1 วันครบกำหนด</div>`;
+
+  // news lists
+  const tag = sc => sc > 0 ? `<span class="tag pos">▲</span>` : sc < 0 ? `<span class="tag neg">▼</span>` : `<span class="tag sub">•</span>`;
+  const list = a => a.length ? a.map(x => `<li>${tag(x.score)}<div><a href="${/^https:\/\//.test(x.link) ? esc(x.link) : "#"}" target="_blank" rel="noopener">${esc(x.title)}</a>
+      <div class="m">${esc(x.source)} · ${x.time.slice(5).replace("-", "/")} น.</div></div></li>`).join("") : `<li class="sub">ไม่พบข่าว</li>`;
+  document.getElementById("newsTh").innerHTML = list(F.headlines_th);
+  document.getElementById("newsEn").innerHTML = list(F.headlines_en);
+  document.getElementById("newsSum").textContent =
+    `อ่านหัวข่าว ${N.count} ข่าว: ▲ ข่าวบวก ${N.bull} · ▼ ข่าวลบ ${N.bear} · • กลาง ${N.neutral} ` +
+    `(ระบบอ่านจากคำในหัวข่าว ข่าวส่วนใหญ่รายงานสิ่งที่เกิดไปแล้ว)`;
+
+  drawForecast(F);
+}
+
+function drawForecast(F) {
+  // x axis = days from today, so 30 days ahead takes real width
+  const s = DATA.series, n = 60, DAY = 864e5;
+  const t0 = new Date(DATA.summary.date + "T00:00:00").getTime();
+  const dx = d => Math.round((new Date(d + "T00:00:00").getTime() - t0) / DAY);
+  const xDate = x => new Date(t0 + x * DAY).toISOString().slice(0, 10);
+  const hist = s.date.slice(-n).map((d, i) => ({ x: dx(d), y: s.price.slice(-n)[i] }));
+  const fc = k => [{ x: 0, y: F.price }, ...F.rows.map(r => ({ x: r.h, y: r[k] }))];
+  const ink = css("--text-secondary"), grid = css("--grid"), blue = css("--series-1");
+  const ds = (label, data, extra) => ({ label, data, pointRadius: 0, borderWidth: 0, tension: 0.25, ...extra });
+  fcChart?.destroy();
+  fcChart = new Chart(document.getElementById("fcChart"), {
+    type: "line",
+    data: { datasets: [
+      ds("ต่ำสุด 80%", fc("lo80"), {}),
+      ds("สูงสุด 80%", fc("hi80"), { fill: "-1", backgroundColor: css("--band-80") }),
+      ds("ต่ำสุด 50%", fc("lo50"), {}),
+      ds("สูงสุด 50%", fc("hi50"), { fill: "-1", backgroundColor: css("--band-50") }),
+      ds("ค่ากลาง", fc("center"), { borderColor: blue, borderWidth: 2, borderDash: [5, 4],
+        pointRadius: c => c.dataIndex > 0 ? 4 : 0, pointBackgroundColor: blue,
+        pointBorderColor: css("--surface-1"), pointBorderWidth: 2 }),
+      ds("ราคาจริง", hist, { borderColor: blue, borderWidth: 2, tension: 0, pointHoverRadius: 5 }),
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: { legend: { display: false }, tooltip: {
+        mode: "x", intersect: false,
+        backgroundColor: css("--surface-1"), titleColor: css("--text-primary"), bodyColor: css("--text-primary"),
+        borderColor: css("--border"), borderWidth: 1, padding: 10,
+        filter: c => !(c.parsed.x === 0 && c.datasetIndex < 5),
+        callbacks: { title: it => thDate(xDate(it[0].parsed.x)) + (it[0].parsed.x > 0 ? ` (อีก ${it[0].parsed.x} วัน)` : ""),
+                     label: c => ` ${c.dataset.label}: ${fmt(c.parsed.y)} บาท` } } },
+      scales: {
+        x: { type: "linear", min: hist[0].x, max: 31, grid: { display: false }, border: { color: grid },
+          afterBuildTicks: ax => { ax.ticks = [-84, -56, -28, 0, 7, 15, 30].filter(v => v >= ax.min).map(v => ({ value: v })); },
+          ticks: { maxRotation: 0, color: ink, callback: v => v === 0 ? "วันนี้" : thDate(xDate(v)) } },
+        y: { grid: { color: grid }, border: { display: false }, ticks: { callback: v => fmt(v) } },
+      },
+    },
   });
 }
 

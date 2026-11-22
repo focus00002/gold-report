@@ -33,6 +33,8 @@ import pandas as pd
 import requests
 import yfinance as yf
 
+import forecast
+
 # ----------------------------------------------------------------- CONFIG ---
 CONFIG = {
     "daily_quota_thb": 100,        # quota added every day
@@ -450,8 +452,15 @@ def main() -> None:
         "rsi": [r(x, 1) for x in cut["rsi"]],
     }
 
+    try:
+        fc = forecast.make_forecast(s, today, now, DATA / "forecasts.csv")
+    except Exception as e:  # forecast must never break the daily report
+        print("forecast failed:", e)
+        fc = None
+
     out = {
         "summary": summary,
+        "forecast": fc,
         "series": series,
         "backtest": [backtest(s, today, y) for y in (1, 3, 5)],
         "portfolio": my_portfolio(purchases, row["price"]),
@@ -468,6 +477,12 @@ def main() -> None:
     (DOCS / "data.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     print(f"{summary['date']}  {summary['price_sell']:,} THB  RSI {summary['rsi']}  "
           f"-> {sig['label']}  | {action} {sell_note}")
+    if fc:
+        print(f"  forecast lean {fc['lean']} ({fc['lean_word']}), trend {fc['trend']}, news {fc['news']}")
+        for x in fc["rows"]:
+            print(f"   +{x['h']}d  {x['center']:,}  80%: {x['lo80']:,}-{x['hi80']:,}  P(up) {x['p_up']}")
+        for b in fc["backtest"]:
+            print(f"   backtest +{b['h']}d  cover80 {b['cover80']}%  cover50 {b['cover50']}%  dir {b['direction']}%")
 
 
 if __name__ == "__main__":

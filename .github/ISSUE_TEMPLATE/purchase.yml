@@ -1,0 +1,46 @@
+name: บันทึกการซื้อ/ขายทอง
+description: บันทึกการซื้อหรือขายทองในทรูมันนี่ ระบบจะบันทึกและอัปเดตหน้าเว็บให้อัตโนมัติ
+title: "บันทึกการซื้อ/ขายทอง"
+labels: ["purchase"]
+body:
+  - type: dropdown
+    id: type
+    attributes:
+      label: ประเภท
+      options:
+        - ซื้อ
+        - ขาย
+      default: 0
+    validations:
+      required: true
+  - type: input
+    id: amount_thb
+    attributes:
+      label: จำนวนเงิน (บาท)
+      description: ยอดเงินที่ซื้อหรือขาย เช่น 1500
+      placeholder: "1500"
+    validations:
+      required: true
+  - type: input
+    id: date
+    attributes:
+      label: วันที่ (ปี ค.ศ.-เดือน-วัน)
+      description: เว้นว่างไว้ = วันนี้
+      placeholder: "2026-11-30"
+  - type: input
+    id: gram
+    attributes:
+      label: ได้ทองกี่กรัม (ไม่บังคับ)
+      description: ดูได้จากหน้ารายการในแอป ถ้าใส่ ระบบจะคำนวณราคาที่ซื้อจริงให้
+      placeholder: "0.4"
+  - type: input
+    id: price_per_baht
+    attributes:
+      label: ราคาต่อบาททองคำ (ไม่บังคับ)
+      description: ถ้าไม่ใส่ทั้งกรัมและราคา ระบบจะใช้ราคาสมาคมค้าทองคำของวันนั้น
+      placeholder: "57150"
+  - type: input
+    id: note
+    attributes:
+      label: หมายเหตุ (ไม่บังคับ)
+      placeholder: ทรูมันนี่

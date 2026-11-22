@@ -88,6 +88,16 @@
   .pos { color: var(--good); } .neg { color: var(--critical); }
   .pill { display: inline-flex; align-items: center; gap: 6px; }
   .pill .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .money { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--grid); }
+  .money .k { color: var(--text-secondary); font-size: 13px; }
+  .money .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .money .d { font-size: 12.5px; color: var(--text-muted); }
+  .money .hl .v { font-size: 26px; }
+  .btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+  .btn { display: inline-block; padding: 8px 18px; border-radius: 999px; text-decoration: none;
+    border: 1px solid var(--border); color: var(--text-primary); font-weight: 600; }
+  .btn.primary { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
   .note { font-size: 12.5px; color: var(--text-muted); margin-top: 16px; }
   .err { color: var(--critical); }
 </style>
@@ -109,6 +119,12 @@
         <div class="sub" id="nextBuy"></div>
         <ul class="reasons" id="reasons"></ul>
       </div>
+    </div>
+    <div class="money" id="money"></div>
+    <div class="btns">
+      <a class="btn primary" id="recordBuy" target="_blank" rel="noopener">บันทึกการซื้อ</a>
+      <a class="btn" id="recordSell" target="_blank" rel="noopener">บันทึกการขาย</a>
+      <span class="sub">เปิดฟอร์มใน GitHub แล้วกด Create ระบบจะบันทึกให้ภายใน 1-2 นาที</span>
     </div>
   </section>
 
@@ -142,6 +158,11 @@
       <div id="port"></div>
     </section>
   </div>
+
+  <section class="card">
+    <h2>ประวัติการซื้อขายจริง</h2>
+    <div class="scroll"><table id="buys"></table></div>
+  </section>
 
   <section class="card">
     <h2>รายงานย้อนหลังรายวัน</h2>
@@ -186,6 +207,30 @@ function render() {
   const rs = [...sig.buy_reasons.map(x => "▼ " + x), ...sig.sell_reasons.map(x => "▲ " + x)];
   document.getElementById("reasons").innerHTML = (rs.length ? rs : ["ไม่มีสัญญาณพิเศษ"]).map(x => `<li>${x}</li>`).join("");
 
+  // money: saved quota, suggested amount, bought today
+  if (S.balance != null) {
+    const over = S.over_cap ? `สูตรคำนวณได้ ${fmt(S.suggest_raw)} บาท (เกินงบ ${fmt(C.max_buy_thb)})` : S.suggest_why;
+    const after = S.balance_after < 0
+      ? `ซื้อเกินโควต้าล่วงหน้า ${fmt(-S.balance_after)} บาท จะหักจากโควต้าวันถัดไป`
+      : `ยอดคงเหลือหลังซื้อ ${fmt(S.balance_after)} บาท`;
+    const m = [
+      ["ยอดสะสมให้ลงวันนี้", `${fmt(S.balance)} บาท`, `รอมา ${S.wait_days} วัน · โควต้าวันละ ${fmt(C.daily_quota_thb)}`, ""],
+      ["แนะนำให้ลง", `${fmt(S.suggest)} บาท${S.over_cap ? "+" : ""}`, over, "hl"],
+      ["ซื้อจริงวันนี้", `${fmt(S.bought_today)} บาท`, after, ""],
+      ["ตั้งแต่เริ่มแผน", `${fmt(S.spent_total)} บาท`, `ใช้ไปจากโควต้าทั้งหมด ${fmt(S.quota_total)} บาท (${S.plan_days} วัน)`, ""],
+    ];
+    document.getElementById("money").innerHTML = m.map(([k, v, d, c]) =>
+      `<div class="${c}"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+  }
+
+  // record buttons: open the GitHub issue form, prefilled
+  const repo = location.hostname.endsWith("github.io")
+    ? `${location.hostname.split(".")[0]}/${location.pathname.split("/")[1]}` : "focus00002/gold-report";
+  const form = (type, amount) => `https://github.com/${repo}/issues/new?` + new URLSearchParams({
+    template: "purchase.yml", type, date: S.date, ...(amount ? { amount_thb: amount } : {}) });
+  document.getElementById("recordBuy").href = form("ซื้อ", S.suggest || "");
+  document.getElementById("recordSell").href = form("ขาย", "");
+
   const tiles = [
     ["ราคาขาย (บาททองคำ)", fmt(S.price_sell), `<span class="${cls(S.change)}">${sgn(S.change)} (${sgn(S.change_pct, 2)}%)</span>`],
     ["ราคารับซื้อ", fmt(S.price_buyback), "ใช้คิดตอนขาย"],
@@ -213,31 +258,36 @@ function render() {
       <tr>${btRow("ซื้อทุกวัน", b.daily)}</tr>`).join("");
 
   // plan since start + real portfolio
-  const PL = S.plan, P = DATA.portfolio;
-  const planHtml = PL ? `<div class="sub" style="margin-bottom:6px">ตามแผน ตั้งแต่ ${thDate(C.start_date)} (${PL.days} วัน)</div><table>
-      <tr><td class="l">โควต้าสะสมทั้งหมด</td><td>${fmt(PL.quota_total)} บาท</td></tr>
-      <tr><td class="l">ซื้อไปแล้ว</td><td>${PL.buys} ครั้ง · ${fmt(PL.invested)} บาท</td></tr>
-      <tr><td class="l">เงินที่ทบรอซื้อ</td><td>${fmt(PL.cash_waiting)} บาท</td></tr>
-      <tr><td class="l">ทองตามแผน</td><td>${fmt(PL.gold_gram, 3)} กรัม</td></tr></table>` : "";
-  document.getElementById("port").innerHTML = planHtml + (P ? `<div class="sub" style="margin:14px 0 6px">จากการซื้อขายจริง</div><table>
-      <tr><td class="l">ซื้อแล้ว</td><td>${P.count} ครั้ง</td></tr>
-      <tr><td class="l">เงินที่ลงไป</td><td>${fmt(P.invested)} บาท</td></tr>
+  const P = DATA.portfolio;
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  document.getElementById("port").innerHTML = P ? `<table>
+      <tr><td class="l">ซื้อขายแล้ว</td><td>${P.count} ครั้ง</td></tr>
+      <tr><td class="l">ซื้อรวม</td><td>${fmt(P.bought)} บาท</td></tr>
+      ${P.sold ? `<tr><td class="l">ขายรวม</td><td>${fmt(P.sold)} บาท (กำไรที่ขายไปแล้ว ${sgn(P.realized)})</td></tr>` : ""}
       <tr><td class="l">ทองที่มี</td><td>${fmt(P.gold_gram, 3)} กรัม</td></tr>
       <tr><td class="l">ต้นทุนเฉลี่ย</td><td>${fmt(P.avg_cost)} บาท/บาททองคำ</td></tr>
       <tr><td class="l">มูลค่าวันนี้</td><td>${fmt(P.value)} บาท</td></tr>
-      <tr><td class="l">กำไร/ขาดทุน</td><td class="${cls(P.profit)}">${sgn(P.profit)} (${sgn(P.profit_pct, 1)}%)</td></tr></table>`
-    : `<div class="sub" style="margin-top:14px">ยังไม่มีข้อมูลการซื้อจริง ส่งวันที่ จำนวนเงิน และราคาที่ซื้อให้ Claude บันทึกลงไฟล์ <code>data/my_purchases.csv</code> ได้เลย</div>`);
+      <tr><td class="l">กำไร/ขาดทุน</td><td class="${cls(P.profit)}">${sgn(P.profit)} (${sgn(P.profit_pct, 1)}%)</td></tr></table>
+      <div class="sub" style="margin-top:8px">มูลค่าคิดจากราคาขายออกของสมาคมฯ ราคาที่ขายคืนได้จริงจะต่ำกว่านี้เล็กน้อย</div>`
+    : `<div class="sub">ยังไม่มีข้อมูลการซื้อจริง กดปุ่ม "บันทึกการซื้อ" ด้านบนหลังซื้อในแอป</div>`;
+
+  document.getElementById("buys").innerHTML = DATA.purchases.length
+    ? `<tr><th class="l">วันที่</th><th class="l">ประเภท</th><th>จำนวนเงิน</th><th>ราคา/บาททองคำ</th><th>กรัม</th><th class="l">หมายเหตุ</th></tr>` +
+      DATA.purchases.map(x => `<tr><td>${thDate(x.date)}</td><td class="l">${x.type === "sell" ? "ขาย" : "ซื้อ"}</td>
+        <td>${fmt(x.amount_thb, 2)}</td><td>${fmt(x.price_per_baht)}</td><td>${fmt(x.gram, 4)}</td><td class="l">${esc(x.note)}</td></tr>`).join("")
+    : `<tr><td class="sub">ยังไม่มีรายการ</td></tr>`;
 
   // daily log
   const dash = v => v === "" || v == null ? "-" : fmt(v);
   document.getElementById("log").innerHTML =
-    `<tr><th class="l">วันที่</th><th>ราคาขาย</th><th>เปลี่ยน</th><th>RSI</th><th>ห่างจุดสูงสุด</th><th class="l">สัญญาณ</th><th>ซื้อ (บาท)</th><th>ยอดทบ</th><th class="l">คำแนะนำ</th></tr>` +
+    `<tr><th class="l">วันที่</th><th>ราคาขาย</th><th>เปลี่ยน</th><th>RSI</th><th>ห่างจุดสูงสุด</th><th class="l">สัญญาณ</th><th>ยอดสะสม</th><th>แนะนำ</th><th>ซื้อจริง</th><th class="l">เหตุผล</th></tr>` +
     DATA.log.map(x => {
       const st = { 5: "good", 4: "good", 3: "neutral", 2: "warning", 1: "critical" }[x.level];
       return `<tr><td>${thDate(x.date)}</td><td>${fmt(x.price_sell)}</td>
         <td class="${cls(+x.change)}">${x.change == null ? "-" : sgn(+x.change)}</td><td>${fmt(x.rsi, 1)}</td><td>${fmt(-x.drawdown_pct, 1)}%</td>
         <td class="l"><span class="pill"><span class="dot" style="background:${statusColor(st)}"></span>${x.signal} (${x.level})</span></td>
-        <td>${x.buy_thb ? fmt(x.buy_thb) : "-"}</td><td>${dash(x.balance_after)}</td><td class="wrap">${x.action}</td></tr>`;
+        <td>${dash(x.balance)}</td><td>${x.suggest_thb ? fmt(x.suggest_thb) : "-"}</td>
+        <td>${x.bought_thb ? fmt(x.bought_thb) : "-"}</td><td class="wrap">${x.action}</td></tr>`;
     }).join("");
 
   drawCharts(1);

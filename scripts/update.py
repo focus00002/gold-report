@@ -39,6 +39,8 @@ CONFIG = {
     "start_date": "2026-11-22",    # day your quota starts counting
     "buy_min_level": 4,            # buy when signal level >= this (4 = น่าซื้อ, 5 = น่าซื้อมาก)
     "max_wait_days": 14,           # buy anyway after waiting this many days
+    "max_buy_thb": 3000,           # most money to suggest for one buy
+    "level5_multiplier": 1.5,      # level 5: suggest saved quota x this
     "sell_pct": 15,                # % of your gold to sell when level = 1
     "rsi_buy": 35,                 # RSI below this = buy point
     "rsi_sell": 70,                # RSI above this = sell point
@@ -253,38 +255,80 @@ def backtest(s: pd.DataFrame, today: pd.Timestamp, years: int) -> dict:
     }
 
 
-def my_portfolio(price_now: float) -> dict | None:
+def load_purchases(s: pd.DataFrame) -> pd.DataFrame:
+    """Your real buys/sells. Missing price is filled with that day's Thai price."""
+    cols = ["date", "type", "amount_thb", "price_per_baht", "note"]
     if not PURCHASES_CSV.exists():
+        return pd.DataFrame(columns=cols)
+    p = pd.read_csv(PURCHASES_CSV)
+    p = p.dropna(subset=["date", "amount_thb"])
+    if p.empty:
+        return pd.DataFrame(columns=cols)
+    p["date"] = pd.to_datetime(p["date"]).dt.normalize()
+    p["type"] = p["type"].fillna("buy").astype(str).str.lower().str.strip()
+    p["amount_thb"] = p["amount_thb"].astype(float)
+    p["price_per_baht"] = pd.to_numeric(p["price_per_baht"], errors="coerce")
+    day_price = s["price"].reindex(p["date"], method="ffill").to_numpy()
+    p["price_per_baht"] = p["price_per_baht"].fillna(pd.Series(day_price, index=p.index))
+    return p.sort_values("date")
+
+
+def my_portfolio(p: pd.DataFrame, price_now: float) -> dict | None:
+    if p.empty:
         return None
-    rows = pd.read_csv(PURCHASES_CSV).dropna(subset=["amount_thb", "price_per_baht"])
-    if rows.empty:
-        return None
-    rows["baht"] = rows["amount_thb"] / rows["price_per_baht"]
-    sign = rows["type"].astype(str).str.lower().map({"buy": 1, "sell": -1}).fillna(1)
-    invested = float((rows["amount_thb"] * sign).sum())
-    baht = float((rows["baht"] * sign).sum())
+    p = p.copy()
+    p["baht"] = p["amount_thb"] / p["price_per_baht"]
+    buys, sells = p[p["type"] != "sell"], p[p["type"] == "sell"]
+    bought_thb, bought_baht = buys["amount_thb"].sum(), buys["baht"].sum()
+    avg = bought_thb / bought_baht if bought_baht else 0
+    sold_baht = sells["baht"].sum()
+    sold_thb = sells["amount_thb"].sum()
+    baht = bought_baht - sold_baht
+    cost_left = baht * avg                                  # cost of gold still held
     value = baht * price_now
-    return {"invested": r(invested, 0), "gold_baht": r(baht, 4),
-            "gold_gram": r(baht * GRAMS_PER_BAHT, 3),
-            "avg_cost": r(invested / baht if baht else None, 0),
-            "value": r(value, 0), "profit": r(value - invested, 0),
-            "profit_pct": r((value / invested - 1) * 100 if invested else None, 1),
-            "count": int(len(rows))}
+    realized = sold_thb - sold_baht * avg                   # profit already taken from sells
+    return {"count": int(len(p)), "bought": r(bought_thb, 0), "sold": r(sold_thb, 0),
+            "gold_baht": r(baht, 4), "gold_gram": r(baht * GRAMS_PER_BAHT, 3),
+            "avg_cost": r(avg or None, 0), "cost_left": r(cost_left, 0),
+            "value": r(value, 0), "profit": r(value - cost_left, 0),
+            "profit_pct": r((value / cost_left - 1) * 100 if cost_left else None, 1),
+            "realized": r(realized, 0)}
 
 
-def action_text(level: int, today_plan: pd.Series | None) -> tuple[str, str]:
-    """Return (main action, sell note)."""
-    sell = ""
+def suggest(level: int, balance: float, wait: int) -> tuple[float, str]:
+    """Suggested amount for one day (before the max-buy cap) and why."""
+    c = CONFIG
+    base = max(balance, 0)
     if level == 1:
-        sell = f"ราคาแพงมาก ถ้ามีทองสะสมอยู่ พิจารณาขายออก {CONFIG['sell_pct']}% ได้"
-    if today_plan is None:
-        return "แผนยังไม่เริ่ม", sell
-    if today_plan["buy"] > 0:
-        days = int(today_plan["wait_days"])
-        why = today_plan["reason"]
-        return f"ซื้อวันนี้ {today_plan['buy']:,.0f} บาท (ยอดทบ {days} วัน, {why})", sell
-    return (f"ยังไม่ซื้อ ทบยอดไว้ก่อน ยอดสะสม {today_plan['balance']:,.0f} บาท "
-            f"(รอมา {int(today_plan['wait_days'])} วัน)"), sell
+        return 0.0, "แพงมาก ทบยอดไว้ก่อน"
+    if level >= c["buy_min_level"]:
+        mult = c["level5_multiplier"] if level == 5 else 1.0
+        why = f"สัญญาณดี ซื้อยอดสะสม × {mult:g}" if mult != 1 else "สัญญาณดี ซื้อยอดสะสม"
+        return round(base * mult / 10) * 10, why
+    if wait >= c["max_wait_days"]:
+        return round(base / 10) * 10, f"รอครบ {c['max_wait_days']} วัน ซื้อเลย"
+    return 0.0, "ยังไม่ถึงจังหวะ ทบยอดไว้ก่อน"
+
+
+def real_ledger(s: pd.DataFrame, purchases: pd.DataFrame, start: pd.Timestamp, today: pd.Timestamp) -> pd.DataFrame:
+    """Quota account from start_date using your REAL buys.
+    balance = quota given so far - money you actually spent on buys."""
+    quota, cap = CONFIG["daily_quota_thb"], CONFIG["max_buy_thb"]
+    buys = purchases[purchases["type"] != "sell"].groupby("date")["amount_thb"].sum()
+    rows, carried, wait = [], 0.0, 0
+    for d, row in s.loc[start:today].iterrows():
+        before = carried + quota
+        wait += 1
+        lvl = int(row["level"])
+        raw, why = suggest(lvl, before, wait)
+        bought = float(buys.get(d, 0.0))
+        carried = before - bought
+        rows.append({"date": d, "level": lvl, "balance_before": before, "wait_days": wait,
+                     "suggest_raw": raw, "suggest": min(raw, cap), "over_cap": raw > cap,
+                     "why": why, "bought": bought, "balance_after": carried})
+        if bought > 0:
+            wait = 0
+    return pd.DataFrame(rows).set_index("date")
 
 
 # ------------------------------------------------------------------ main ---
@@ -293,6 +337,7 @@ def main() -> None:
     now = datetime.now(BKK)
     today = pd.Timestamp(now.date())
     start = pd.Timestamp(CONFIG["start_date"])
+    cap = CONFIG["max_buy_thb"]
 
     hist = fetch_history()
     actual = load_actual()
@@ -308,10 +353,22 @@ def main() -> None:
     prev = s.loc[s["trading_day"] & (s.index < today)].iloc[-1]
     sig = score(row)
 
-    plan = run_plan(s, start, today) if today >= start else None
-    today_plan = plan.iloc[-1] if plan is not None else None
-    action, sell_note = action_text(sig["level"], today_plan)
-    plan_sum = summarize_plan(plan, row["price"]) if plan is not None else None
+    purchases = load_purchases(s)
+    ledger = real_ledger(s, purchases, start, today) if today >= start else None
+    L = ledger.iloc[-1] if ledger is not None else None
+
+    if L is None:
+        action = "แผนยังไม่เริ่ม"
+    elif L["bought"] > 0:
+        action = f"วันนี้บันทึกการซื้อแล้ว {L['bought']:,.0f} บาท"
+    elif L["suggest"] > 0:
+        action = f"แนะนำซื้อวันนี้ {L['suggest']:,.0f} บาท"
+        if L["over_cap"]:
+            action += f" (สูตรคำนวณได้ {L['suggest_raw']:,.0f} บาท เกินงบ {cap:,} บาท)"
+    else:
+        action = f"ยังไม่ซื้อ ทบยอดไว้ก่อน (ยอดสะสม {L['balance_before']:,.0f} บาท)"
+    sell_note = (f"ราคาแพงมาก ถ้ามีทองสะสมอยู่ พิจารณาขายออก {CONFIG['sell_pct']}% ได้"
+                 if sig["level"] == 1 else "")
 
     summary = {
         "date": today.strftime("%Y-%m-%d"),
@@ -328,20 +385,25 @@ def main() -> None:
         "ma50": r(row["ma50"], 0), "ma200": r(row["ma200"], 0),
         "rsi": r(row["rsi"], 1),
         "high52": r(row["high52"], 0), "low52": r(row["low52"], 0),
-        "signal": sig,
-        "buy_today": bool(today_plan is not None and today_plan["buy"] > 0),
-        "buy_amount_today": r(today_plan["buy"], 0) if today_plan is not None else 0,
-        "balance": r(today_plan["balance"], 0) if today_plan is not None else 0,
-        "wait_days": int(today_plan["wait_days"]) if today_plan is not None else 0,
-        "action": action, "sell_note": sell_note,
-        "plan": plan_sum,
+        "signal": sig, "action": action, "sell_note": sell_note,
         "calibration": r(factor, 4),
     }
+    if L is not None:
+        summary.update({
+            "balance": r(L["balance_before"], 0),
+            "suggest": r(L["suggest"], 0), "suggest_raw": r(L["suggest_raw"], 0),
+            "over_cap": bool(L["over_cap"]), "suggest_why": L["why"],
+            "bought_today": r(L["bought"], 0), "balance_after": r(L["balance_after"], 0),
+            "wait_days": int(L["wait_days"]),
+            "plan_days": int(len(ledger)),
+            "quota_total": r(len(ledger) * CONFIG["daily_quota_thb"], 0),
+            "spent_total": r(ledger["bought"].sum(), 0),
+        })
 
-    # daily report: last LOG_DAYS days. Plan columns filled from start_date on.
+    # daily report: last LOG_DAYS days. Quota columns filled from start_date on.
     log_from = today - pd.Timedelta(days=LOG_DAYS - 1)
     fields = ["date", "price_sell", "change", "rsi", "drawdown_pct", "level", "signal",
-              "quota_today", "buy_thb", "balance_after", "action"]
+              "balance", "suggest_thb", "bought_thb", "balance_after", "action"]
     log = []
     prev_price = None
     for d, x in s.loc[s.index >= log_from - pd.Timedelta(days=7)].iterrows():
@@ -350,22 +412,23 @@ def main() -> None:
         if d < log_from:
             continue
         lvl = int(x["level"])
-        p = plan.loc[d] if plan is not None and d in plan.index else None
-        if p is None:
+        g = ledger.loc[d] if ledger is not None and d in ledger.index else None
+        if g is None:
             act = "ก่อนเริ่มแผน"
-        elif p["buy"] > 0:
-            act = f"ซื้อ {p['buy']:,.0f} บาท ({p['reason']})"
         else:
-            act = "ทบยอด"
+            act = g["why"]
+            if g["over_cap"]:
+                act += f" (สูตรได้ {g['suggest_raw']:,.0f} เกินงบ)"
         if lvl == 1:
             act += f" · พิจารณาขาย {CONFIG['sell_pct']}%"
         log.append({
             "date": d.strftime("%Y-%m-%d"), "price_sell": r(x["price"], 0),
             "change": r(chg, 0), "rsi": r(x["rsi"], 1), "drawdown_pct": r(x["drawdown"], 1),
             "level": lvl, "signal": LEVELS[lvl][0],
-            "quota_today": CONFIG["daily_quota_thb"] if p is not None else "",
-            "buy_thb": r(p["buy"], 0) if p is not None else "",
-            "balance_after": r(p["balance"], 0) if p is not None else "",
+            "balance": r(g["balance_before"], 0) if g is not None else "",
+            "suggest_thb": r(g["suggest"], 0) if g is not None else "",
+            "bought_thb": r(g["bought"], 0) if g is not None else "",
+            "balance_after": r(g["balance_after"], 0) if g is not None else "",
             "action": act,
         })
     DATA.mkdir(exist_ok=True)
@@ -391,7 +454,13 @@ def main() -> None:
         "summary": summary,
         "series": series,
         "backtest": [backtest(s, today, y) for y in (1, 3, 5)],
-        "portfolio": my_portfolio(row["price"]),
+        "portfolio": my_portfolio(purchases, row["price"]),
+        "purchases": [
+            {"date": x["date"].strftime("%Y-%m-%d"), "type": x["type"],
+             "amount_thb": r(x["amount_thb"], 2), "price_per_baht": r(x["price_per_baht"], 0),
+             "gram": r(x["amount_thb"] / x["price_per_baht"] * GRAMS_PER_BAHT, 4),
+             "note": "" if pd.isna(x["note"]) else str(x["note"])}
+            for _, x in purchases.iloc[::-1].iterrows()],
         "log": log[::-1],
         "config": CONFIG,
     }
@@ -399,10 +468,6 @@ def main() -> None:
     (DOCS / "data.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     print(f"{summary['date']}  {summary['price_sell']:,} THB  RSI {summary['rsi']}  "
           f"-> {sig['label']}  | {action} {sell_note}")
-    for b in out["backtest"]:
-        sm, dl = b["smart"], b["daily"]
-        print(f"  {b['years']}y  smart: {sm['buys']} buys, {sm['profit_pct']}%  avg {sm['avg_cost']}"
-              f"  | daily: {dl['profit_pct']}%  avg {dl['avg_cost']}")
 
 
 if __name__ == "__main__":

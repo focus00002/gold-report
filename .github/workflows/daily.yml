@@ -1,0 +1,36 @@
+name: Daily gold report
+
+on:
+  schedule:
+    - cron: "30 2 * * *"   # 02:30 UTC = 09:30 Bangkok (GitHub may start a few minutes late)
+  workflow_dispatch:        # "Run workflow" button for manual runs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-report
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - run: python scripts/update.py
+
+      - name: Commit new data
+        run: |
+          git config user.name "gold-bot"
+          git config user.email "gold-bot@users.noreply.github.com"
+          git add data docs
+          git diff --cached --quiet || git commit -m "daily report $(TZ=Asia/Bangkok date +%F)"
+          git push

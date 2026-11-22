@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>รายงานออมทองรายวัน</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f4f3f0;
+    --surface-1: #fcfcfb;
+    --border: #e4e3de;
+    --grid: #ecebe7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7974;
+    --series-1: #2a78d6;  /* price  */
+    --series-2: #eb6834;  /* MA50   */
+    --series-3: #1baf7a;  /* MA200  */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --neutral: #8a8984;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #111110;
+      --surface-1: #1a1a19;
+      --border: #2e2e2c;
+      --grid: #2a2a28;
+      --text-primary: #f0efec;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8e88;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.5 "Sarabun", "Noto Sans Thai", "Leelawadee UI", system-ui, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .sub { color: var(--text-secondary); font-size: 13px; }
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-top: 16px;
+  }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  .tile .k { color: var(--text-secondary); font-size: 13px; }
+  .tile .v { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .d { font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .signal { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px;
+    border-radius: 999px; font-weight: 600; font-size: 18px;
+    border: 2px solid var(--neutral);
+  }
+  .badge .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--neutral); }
+  .lvl { font-size: 13px; color: var(--text-secondary); }
+  .action { font-size: 17px; font-weight: 600; margin: 8px 0 4px; }
+  ul.reasons { margin: 4px 0 0; padding-left: 20px; color: var(--text-secondary); }
+  .cols { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .cols > .card, .grid > * { min-width: 0; }
+  #port td { white-space: normal; }
+  @media (max-width: 700px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .toolbar button {
+    border: 1px solid var(--border); background: transparent; color: var(--text-primary);
+    padding: 4px 14px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 14px;
+  }
+  .toolbar button[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--text-secondary); margin-left: auto; }
+  .legend i { display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; }
+  .chart-box { position: relative; height: 340px; }
+  .chart-box.small { height: 150px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th { color: var(--text-secondary); font-weight: 500; }
+  th:first-child, td:first-child, td.l, th.l { text-align: left; }
+  td.wrap { white-space: normal; text-align: left; min-width: 220px; }
+  .scroll { overflow-x: auto; }
+  .pos { color: var(--good); } .neg { color: var(--critical); }
+  .pill { display: inline-flex; align-items: center; gap: 6px; }
+  .pill .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .note { font-size: 12.5px; color: var(--text-muted); margin-top: 16px; }
+  .err { color: var(--critical); }
+</style>
+</head>
+<body>
+<main>
+  <h1>รายงานออมทองรายวัน</h1>
+  <div class="sub" id="meta">กำลังโหลด…</div>
+
+  <section class="card">
+    <div class="signal">
+      <div>
+        <div class="badge" id="badge"><span class="dot"></span><span id="badgeText">-</span></div>
+        <div class="lvl" id="lvl"></div>
+      </div>
+      <div style="flex:1;min-width:260px">
+        <div class="action" id="action"></div>
+        <div class="action" id="sellNote" style="color:var(--critical)"></div>
+        <div class="sub" id="nextBuy"></div>
+        <ul class="reasons" id="reasons"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="card grid" id="tiles"></section>
+
+  <section class="card">
+    <div class="toolbar">
+      <h2 style="margin:0 12px 0 0">ราคาทองแท่ง 96.5% (บาท/บาททองคำ)</h2>
+      <button data-y="1" aria-pressed="true">1 ปี</button>
+      <button data-y="3" aria-pressed="false">3 ปี</button>
+      <button data-y="5" aria-pressed="false">5 ปี</button>
+      <div class="legend">
+        <span><i style="background:var(--series-1)"></i>ราคาขาย</span>
+        <span><i style="background:var(--series-2)"></i>เฉลี่ย 50 วัน</span>
+        <span><i style="background:var(--series-3)"></i>เฉลี่ย 200 วัน</span>
+      </div>
+    </div>
+    <div class="chart-box"><canvas id="priceChart" aria-label="กราฟราคาทอง"></canvas></div>
+    <div class="sub" style="margin:14px 0 4px">RSI 14 วัน (ต่ำกว่า <span id="rsiLo"></span> = ขายมากเกินไป, สูงกว่า <span id="rsiHi"></span> = ซื้อมากเกินไป)</div>
+    <div class="chart-box small"><canvas id="rsiChart" aria-label="กราฟ RSI"></canvas></div>
+  </section>
+
+  <div class="cols">
+    <section class="card">
+      <h2>ทดสอบย้อนหลัง (จำลอง)</h2>
+      <div class="sub" id="dcaSub" style="margin-bottom:8px"></div>
+      <div class="scroll"><table id="dca"></table></div>
+    </section>
+    <section class="card">
+      <h2>พอร์ตของฉัน</h2>
+      <div id="port"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>รายงานย้อนหลังรายวัน</h2>
+    <div class="scroll"><table id="log"></table></div>
+  </section>
+
+  <p class="note">
+    ราคาย้อนหลังคำนวณจาก Gold Spot (GC=F) × ค่าเงิน USD/THB แล้วปรับให้ตรงกับราคาสมาคมค้าทองคำ
+    ราคาในแอปทรูมันนี่อาจต่างเล็กน้อย สัญญาณนี้เป็นสูตรทางเทคนิคที่ตั้งไว้เอง ไม่ใช่คำแนะนำการลงทุนจากผู้เชี่ยวชาญ
+  </p>
+</main>
+
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (x, d = 0) => x == null ? "-" : Number(x).toLocaleString("th-TH", { minimumFractionDigits: d, maximumFractionDigits: d });
+const sgn = (x, d = 0) => x == null ? "-" : (x > 0 ? "+" : "") + fmt(x, d);
+const cls = x => x > 0 ? "pos" : x < 0 ? "neg" : "";
+const thDate = s => new Date(s + "T00:00:00").toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" });
+const statusColor = s => css("--" + (s || "neutral"));
+
+let DATA, priceChart, rsiChart;
+
+fetch("data.json?t=" + Date.now()).then(r => r.json()).then(d => { DATA = d; render(); })
+  .catch(e => { document.getElementById("meta").innerHTML = '<span class="err">โหลดข้อมูลไม่ได้: ' + e + "</span>"; });
+
+function render() {
+  const S = DATA.summary, sig = S.signal;
+  document.getElementById("meta").textContent =
+    `ข้อมูลวันที่ ${thDate(S.date)} · อัปเดต ${S.generated_at} น. · ราคาจาก ${S.price_source} ${S.price_note}`;
+
+  const badge = document.getElementById("badge");
+  badge.style.borderColor = statusColor(sig.status);
+  badge.querySelector(".dot").style.background = statusColor(sig.status);
+  document.getElementById("badgeText").textContent = sig.label;
+  document.getElementById("lvl").textContent = `ระดับ ${sig.level} จาก 5 (5 = ถูกที่สุด, 1 = แพงที่สุด)`;
+  const C = DATA.config;
+  document.getElementById("action").textContent = S.action;
+  document.getElementById("sellNote").textContent = S.sell_note || "";
+  document.getElementById("nextBuy").textContent =
+    `โควต้าวันละ ${fmt(C.daily_quota_thb)} บาท · ซื้อเมื่อสัญญาณระดับ ${C.buy_min_level} ขึ้นไป · ` +
+    `ถ้ารอครบ ${C.max_wait_days} วันจะซื้อเลย`;
+  const rs = [...sig.buy_reasons.map(x => "▼ " + x), ...sig.sell_reasons.map(x => "▲ " + x)];
+  document.getElementById("reasons").innerHTML = (rs.length ? rs : ["ไม่มีสัญญาณพิเศษ"]).map(x => `<li>${x}</li>`).join("");
+
+  const tiles = [
+    ["ราคาขาย (บาททองคำ)", fmt(S.price_sell), `<span class="${cls(S.change)}">${sgn(S.change)} (${sgn(S.change_pct, 2)}%)</span>`],
+    ["ราคารับซื้อ", fmt(S.price_buyback), "ใช้คิดตอนขาย"],
+    ["ราคาต่อกรัม", fmt(S.price_per_gram, 2), "ทองแท่ง ÷ 15.244 กรัม"],
+    ["RSI 14 วัน", fmt(S.rsi, 1), S.rsi < DATA.config.rsi_buy ? "ขายมากเกินไป" : S.rsi > DATA.config.rsi_sell ? "ซื้อมากเกินไป" : "ปกติ"],
+    ["เฉลี่ย 50 / 200 วัน", `${fmt(S.ma50)}`, `200 วัน: ${fmt(S.ma200)}`],
+    ["ห่างจุดสูงสุด 52 สัปดาห์", `${fmt(-sig.drawdown_pct, 1)}%`, `สูงสุด ${fmt(S.high52)} · ต่ำสุด ${fmt(S.low52)}`],
+    ["Gold Spot / ค่าเงิน", `$${fmt(S.usd_oz, 0)}`, `1 USD = ${fmt(S.usdthb, 2)} บาท`],
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map(([k, v, d]) =>
+    `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+
+  document.getElementById("rsiLo").textContent = DATA.config.rsi_buy;
+  document.getElementById("rsiHi").textContent = DATA.config.rsi_sell;
+
+  // backtest: carry-over plan vs buying the quota every day
+  document.getElementById("dcaSub").textContent =
+    `เทียบ "ทบยอดรอสัญญาณ" กับ "ซื้อ ${fmt(C.daily_quota_thb)} บาททุกวัน" ด้วยเงินเท่ากัน ` +
+    `(มูลค่ารวมเงินที่ยังรอซื้ออยู่)`;
+  const btRow = (label, x) => `<td class="l">${label}</td><td>${x.buys}</td><td>${fmt(x.gold_gram, 2)}</td>
+      <td>${fmt(x.avg_cost)}</td><td class="${cls(x.profit)}">${sgn(x.profit_pct, 1)}%</td>`;
+  document.getElementById("dca").innerHTML =
+    `<tr><th class="l">ระยะ</th><th class="l">วิธี</th><th>ซื้อ (ครั้ง)</th><th>ได้ทอง (กรัม)</th><th>ต้นทุนเฉลี่ย</th><th>กำไร</th></tr>` +
+    DATA.backtest.map(b => `<tr><td rowspan="2">${b.years} ปี<div class="sub">ลงทุน ${fmt(b.smart.quota_total)}</div></td>${btRow("ทบยอดรอสัญญาณ", b.smart)}</tr>
+      <tr>${btRow("ซื้อทุกวัน", b.daily)}</tr>`).join("");
+
+  // plan since start + real portfolio
+  const PL = S.plan, P = DATA.portfolio;
+  const planHtml = PL ? `<div class="sub" style="margin-bottom:6px">ตามแผน ตั้งแต่ ${thDate(C.start_date)} (${PL.days} วัน)</div><table>
+      <tr><td class="l">โควต้าสะสมทั้งหมด</td><td>${fmt(PL.quota_total)} บาท</td></tr>
+      <tr><td class="l">ซื้อไปแล้ว</td><td>${PL.buys} ครั้ง · ${fmt(PL.invested)} บาท</td></tr>
+      <tr><td class="l">เงินที่ทบรอซื้อ</td><td>${fmt(PL.cash_waiting)} บาท</td></tr>
+      <tr><td class="l">ทองตามแผน</td><td>${fmt(PL.gold_gram, 3)} กรัม</td></tr></table>` : "";
+  document.getElementById("port").innerHTML = planHtml + (P ? `<div class="sub" style="margin:14px 0 6px">จากการซื้อขายจริง</div><table>
+      <tr><td class="l">ซื้อแล้ว</td><td>${P.count} ครั้ง</td></tr>
+      <tr><td class="l">เงินที่ลงไป</td><td>${fmt(P.invested)} บาท</td></tr>
+      <tr><td class="l">ทองที่มี</td><td>${fmt(P.gold_gram, 3)} กรัม</td></tr>
+      <tr><td class="l">ต้นทุนเฉลี่ย</td><td>${fmt(P.avg_cost)} บาท/บาททองคำ</td></tr>
+      <tr><td class="l">มูลค่าวันนี้</td><td>${fmt(P.value)} บาท</td></tr>
+      <tr><td class="l">กำไร/ขาดทุน</td><td class="${cls(P.profit)}">${sgn(P.profit)} (${sgn(P.profit_pct, 1)}%)</td></tr></table>`
+    : `<div class="sub" style="margin-top:14px">ยังไม่มีข้อมูลการซื้อจริง ส่งวันที่ จำนวนเงิน และราคาที่ซื้อให้ Claude บันทึกลงไฟล์ <code>data/my_purchases.csv</code> ได้เลย</div>`);
+
+  // daily log
+  const dash = v => v === "" || v == null ? "-" : fmt(v);
+  document.getElementById("log").innerHTML =
+    `<tr><th class="l">วันที่</th><th>ราคาขาย</th><th>เปลี่ยน</th><th>RSI</th><th>ห่างจุดสูงสุด</th><th class="l">สัญญาณ</th><th>ซื้อ (บาท)</th><th>ยอดทบ</th><th class="l">คำแนะนำ</th></tr>` +
+    DATA.log.map(x => {
+      const st = { 5: "good", 4: "good", 3: "neutral", 2: "warning", 1: "critical" }[x.level];
+      return `<tr><td>${thDate(x.date)}</td><td>${fmt(x.price_sell)}</td>
+        <td class="${cls(+x.change)}">${x.change == null ? "-" : sgn(+x.change)}</td><td>${fmt(x.rsi, 1)}</td><td>${fmt(-x.drawdown_pct, 1)}%</td>
+        <td class="l"><span class="pill"><span class="dot" style="background:${statusColor(st)}"></span>${x.signal} (${x.level})</span></td>
+        <td>${x.buy_thb ? fmt(x.buy_thb) : "-"}</td><td>${dash(x.balance_after)}</td><td class="wrap">${x.action}</td></tr>`;
+    }).join("");
+
+  drawCharts(1);
+  document.querySelectorAll(".toolbar button").forEach(b => b.onclick = () => {
+    document.querySelectorAll(".toolbar button").forEach(o => o.setAttribute("aria-pressed", o === b));
+    drawCharts(+b.dataset.y);
+  });
+}
+
+function sliceYears(y) {
+  const s = DATA.series, last = new Date(s.date[s.date.length - 1]);
+  const from = new Date(last); from.setFullYear(from.getFullYear() - y);
+  const i = s.date.findIndex(d => new Date(d) >= from);
+  const cut = a => a.slice(i);
+  return { date: cut(s.date), price: cut(s.price), ma50: cut(s.ma50), ma200: cut(s.ma200), rsi: cut(s.rsi) };
+}
+
+function drawCharts(y) {
+  const d = sliceYears(y);
+  const ink = css("--text-secondary"), grid = css("--grid");
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.color = ink;
+  const xAxis = {
+    grid: { display: false }, border: { color: grid },
+    ticks: { maxTicksLimit: 8, maxRotation: 0, callback(v) { return thDate(this.getLabelForValue(v)); } },
+  };
+  const tooltip = {
+    mode: "index", intersect: false, backgroundColor: css("--surface-1"),
+    titleColor: css("--text-primary"), bodyColor: css("--text-primary"),
+    borderColor: css("--border"), borderWidth: 1, padding: 10, usePointStyle: true,
+    callbacks: { title: it => thDate(it[0].label) },
+  };
+  const line = (label, data, color, width = 2) => ({
+    label, data, borderColor: color, backgroundColor: color, borderWidth: width,
+    pointRadius: 0, pointHoverRadius: 5, pointHoverBorderColor: css("--surface-1"), pointHoverBorderWidth: 2,
+    tension: 0, spanGaps: true,
+  });
+
+  priceChart?.destroy();
+  priceChart = new Chart(document.getElementById("priceChart"), {
+    type: "line",
+    data: { labels: d.date, datasets: [
+      line("ราคาขาย", d.price, css("--series-1")),
+      line("เฉลี่ย 50 วัน", d.ma50, css("--series-2"), 1.5),
+      line("เฉลี่ย 200 วัน", d.ma200, css("--series-3"), 1.5),
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false },
+        tooltip: { ...tooltip, callbacks: { ...tooltip.callbacks, label: c => ` ${c.dataset.label}: ${fmt(c.parsed.y)} บาท` } } },
+      scales: { x: xAxis, y: { grid: { color: grid }, border: { display: false }, ticks: { callback: v => fmt(v) } } },
+    },
+  });
+
+  const lo = DATA.config.rsi_buy, hi = DATA.config.rsi_sell;
+  rsiChart?.destroy();
+  rsiChart = new Chart(document.getElementById("rsiChart"), {
+    type: "line",
+    data: { labels: d.date, datasets: [
+      line("RSI", d.rsi, css("--text-secondary"), 1.5),
+      { ...line(`เส้น ${hi}`, d.date.map(() => hi), css("--critical"), 1), borderDash: [4, 4], pointHoverRadius: 0 },
+      { ...line(`เส้น ${lo}`, d.date.map(() => lo), css("--good"), 1), borderDash: [4, 4], pointHoverRadius: 0 },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { display: false },
+        tooltip: { ...tooltip, filter: c => c.datasetIndex === 0, callbacks: { ...tooltip.callbacks, label: c => ` RSI: ${fmt(c.parsed.y, 1)}` } } },
+      scales: { x: xAxis, y: { min: 0, max: 100, grid: { color: grid }, border: { display: false }, ticks: { stepSize: 50 } } },
+    },
+  });
+}
+
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => DATA && render());
+</script>
+</body>
+</html>
